@@ -53,11 +53,26 @@ header strong {
   letter-spacing: 0.04em;
 }
 
-/* ── BOARD ── */
+/* ── BOARD (видимая область — viewport) ── */
 #board {
   flex: 1 1 auto;
   position: relative;
   overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+}
+
+#board.panning {
+  cursor: grabbing;
+}
+
+/* ── WORLD (трансформируется при зуме/панорамировании) ── */
+#world {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  will-change: transform;
 }
 
 /* ── TARGET FRAME (область сборки пазла) ── */
@@ -72,7 +87,6 @@ header strong {
   z-index: 0;
 }
 
-/* Затемняющий слой поверх фоновой картинки внутри рамки */
 #target::before {
   content: '';
   position: absolute;
@@ -126,6 +140,41 @@ header strong {
 .piece.snap-flash {
   animation: snapFlash 300ms ease-out forwards;
 }
+
+/* ── ZOOM HUD ── */
+#zoom-hud {
+  position: absolute;
+  bottom: 14px;
+  right: 14px;
+  display: flex;
+  gap: 6px;
+  z-index: 9000;
+}
+
+.zoom-btn {
+  width: 36px;
+  height: 36px;
+  background: rgba(15, 34, 64, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #c5d5e8;
+  font-family: inherit;
+  font-size: 18px;
+  font-weight: 700;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.zoom-btn:hover {
+  background: rgba(40, 65, 110, 0.95);
+}
+
+.zoom-btn:active {
+  background: rgba(60, 85, 130, 1);
+}
 </style>
 </head>
 <body>
@@ -135,7 +184,15 @@ header strong {
 </header>
 
 <div id="board">
-  <div id="target"></div>
+  <div id="world">
+    <div id="target"></div>
+  </div>
+
+  <div id="zoom-hud">
+    <button class="zoom-btn" id="zoom-out" title="Отдалить">−</button>
+    <button class="zoom-btn" id="zoom-reset" title="Сброс" style="font-size:13px">⟲</button>
+    <button class="zoom-btn" id="zoom-in" title="Приблизить">+</button>
+  </div>
 </div>
 
 <script>
@@ -145,19 +202,30 @@ header strong {
    КОНФИГУРАЦИЯ
 ══════════════════════════════════════ */
 const CONFIG = {
-  imageUrl:    'secret.png',    // картинка для пазла (со спрятанным шифром)
-  bgImageUrl:  'secret2.png',   // фоновая картинка-подсказка (без шифра) — ставится в рамке
+  imageUrl:    'secret.png',
+  bgImageUrl:  'secret2.png',
   cols:        6,
   rows:        5,
-  snapDist:    25,              // px — дистанция прилипания
-  snapMs:      200,             // мс — длительность анимации прилипания
+  snapDist:    25,        // px (в координатах world) — дистанция прилипания
+  snapMs:      200,
+  // Размер «мира» — большой, чтобы было куда раскидать кусочки и куда панорамировать.
+  // Картинка квадратная 1:1, и берётся как 70% от меньшей стороны видимой области.
+  worldPad:    0.6,       // отступ вокруг рамки в долях от её стороны (0.6 → +60% с каждой стороны)
+  // Зум
+  minZoom:     0.4,
+  maxZoom:     3.0,
+  zoomStep:    1.15,      // множитель на одно колёсико/кнопку
 };
 
 /* ══════════════════════════════════════
    DOM-элементы
 ══════════════════════════════════════ */
 const board    = document.getElementById('board');
+const world    = document.getElementById('world');
 const targetEl = document.getElementById('target');
+const btnIn    = document.getElementById('zoom-in');
+const btnOut   = document.getElementById('zoom-out');
+const btnReset = document.getElementById('zoom-reset');
 
 /* ══════════════════════════════════════
    ГЛОБАЛЬНОЕ СОСТОЯНИЕ
@@ -165,9 +233,21 @@ const targetEl = document.getElementById('target');
 let pieces  = [];
 let pieceW  = 0;
 let pieceH  = 0;
-let tRect   = {};
+let tRect   = {};            // координаты рамки сборки в системе world
+let worldW  = 0;
+let worldH  = 0;
 
-let drag = null;
+// Состояние зума и панорамирования (трансформация world)
+let zoom = 1;
+let panX = 0;   // смещение world внутри board (в screen-px)
+let panY = 0;
+
+let drag = null;             // активный drag кусочка
+let pan  = null;             // активное панорамирование
+
+// Pinch-zoom (два пальца)
+let pinch = null;
+
 let audioCtx = null;
 
 /* ══════════════════════════════════════
@@ -177,6 +257,25 @@ function puzzleComplete() {
   return pieces.length > 0 && pieces.every(p => p.dataset.snapped === '1');
 }
 
+function applyTransform() {
+  world.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+}
+
+// Перевод screen-координат (внутри board) → координаты world
+function screenToWorld(sx, sy) {
+  return {
+    x: (sx - panX) / zoom,
+    y: (sy - panY) / zoom,
+  };
+}
+
+// Получить координаты события в системе board (без учёта зума)
+function evtBoardPos(e) {
+  const t = e.touches ? e.touches[0] : e;
+  const br = board.getBoundingClientRect();
+  return { x: t.clientX - br.left, y: t.clientY - br.top };
+}
+
 /* ══════════════════════════════════════
    ИНИЦИАЛИЗАЦИЯ
 ══════════════════════════════════════ */
@@ -184,43 +283,62 @@ function init() {
   pieces.forEach(p => p.remove());
   pieces = [];
   drag = null;
+  pan  = null;
+  pinch = null;
+  zoom = 1;
+  panX = 0;
+  panY = 0;
 
-  const img = new Image();
-  img.onload  = () => build(img.naturalWidth / img.naturalHeight);
-  img.onerror = () => build(2);
-  img.src = CONFIG.imageUrl;
+  build();
 }
 
 /* ══════════════════════════════════════
-   ПОСТРОЕНИЕ ПАЗЛА
+   ПОСТРОЕНИЕ ПАЗЛА (квадрат 1:1)
 ══════════════════════════════════════ */
-function build(ratio) {
+function build() {
   const bw = board.offsetWidth;
   const bh = board.offsetHeight;
 
-  let tw = bw * 0.55;
-  let th = tw / ratio;
-  if (th > bh * 0.85) { th = bh * 0.85; tw = th * ratio; }
+  // Сторона рамки сборки = меньшая из (70% ширины, 80% высоты), картинка квадратная
+  const side = Math.min(bw * 0.70, bh * 0.80);
 
-  const tl = (bw - tw) / 2;
-  const tt = (bh - th) / 2;
+  // Размер «мира»: рамка + отступы вокруг (есть место для разброса деталей)
+  const pad = side * CONFIG.worldPad;
+  worldW = side + pad * 2;
+  worldH = side + pad * 2;
+
+  // Рамка сборки — в центре мира
+  const tl = pad;
+  const tt = pad;
+
+  tRect = { l: tl, t: tt, w: side, h: side };
+
+  // Применяем геометрию
+  world.style.width  = worldW + 'px';
+  world.style.height = worldH + 'px';
 
   targetEl.style.left   = tl + 'px';
   targetEl.style.top    = tt + 'px';
-  targetEl.style.width  = tw + 'px';
-  targetEl.style.height = th + 'px';
+  targetEl.style.width  = side + 'px';
+  targetEl.style.height = side + 'px';
 
-  tRect  = { l: tl, t: tt, w: tw, h: th };
-  pieceW = tw / CONFIG.cols;
-  pieceH = th / CONFIG.rows;
+  pieceW = side / CONFIG.cols;
+  pieceH = side / CONFIG.rows;
 
+  // Стартовый зум: чтобы рамка целиком влезала в board с небольшим запасом
+  zoom = Math.min(bw / worldW, bh / worldH);
+  zoom = Math.max(CONFIG.minZoom, Math.min(zoom, CONFIG.maxZoom));
+
+  // Центрируем world в board
+  panX = (bw - worldW * zoom) / 2;
+  panY = (bh - worldH * zoom) / 2;
+
+  applyTransform();
   makePieces();
 }
 
 function makePieces() {
-  const bw = board.offsetWidth;
-  const bh = board.offsetHeight;
-  const positions = scatter(CONFIG.cols * CONFIG.rows, bw, bh);
+  const positions = scatter(CONFIG.cols * CONFIG.rows);
 
   for (let row = 0; row < CONFIG.rows; row++) {
     for (let col = 0; col < CONFIG.cols; col++) {
@@ -244,28 +362,28 @@ function makePieces() {
       el.style.left = x + 'px';
       el.style.top  = y + 'px';
 
-      el.addEventListener('mousedown', onDown);
-      el.addEventListener('touchstart', onDown, { passive: false });
+      el.addEventListener('mousedown', onPieceDown);
+      el.addEventListener('touchstart', onPieceDown, { passive: false });
 
-      board.appendChild(el);
+      world.appendChild(el);
       pieces.push(el);
     }
   }
 }
 
 /* ══════════════════════════════════════
-   РАЗБРОС КУСОЧКОВ ПО КРАЯМ
+   РАЗБРОС ВОКРУГ РАМКИ В МИРЕ
 ══════════════════════════════════════ */
-function scatter(n, bw, bh) {
+function scatter(n) {
   const { l, t, w, h } = tRect;
   const pad = 8;
   const out = [];
 
   const regions = [
-    { xl: 0,           xr: bw - pieceW,      yt: 0,           yb: t - pad - pieceH },
-    { xl: 0,           xr: bw - pieceW,      yt: t + h + pad, yb: bh - pieceH      },
-    { xl: 0,           xr: l - pad - pieceW, yt: 0,           yb: bh - pieceH      },
-    { xl: l + w + pad, xr: bw - pieceW,      yt: 0,           yb: bh - pieceH      },
+    { xl: 0,           xr: worldW - pieceW,  yt: 0,           yb: t - pad - pieceH },
+    { xl: 0,           xr: worldW - pieceW,  yt: t + h + pad, yb: worldH - pieceH  },
+    { xl: 0,           xr: l - pad - pieceW, yt: 0,           yb: worldH - pieceH  },
+    { xl: l + w + pad, xr: worldW - pieceW,  yt: 0,           yb: worldH - pieceH  },
   ].filter(r => r.xr > r.xl && r.yb > r.yt);
 
   for (let i = 0; i < n; i++) {
@@ -280,15 +398,15 @@ function scatter(n, bw, bh) {
     for (const reg of shuffled) {
       x = reg.xl + Math.random() * (reg.xr - reg.xl);
       y = reg.yt + Math.random() * (reg.yb - reg.yt);
-      x = Math.max(0, Math.min(x, bw - pieceW));
-      y = Math.max(0, Math.min(y, bh - pieceH));
+      x = Math.max(0, Math.min(x, worldW - pieceW));
+      y = Math.max(0, Math.min(y, worldH - pieceH));
       ok = true;
       break;
     }
 
     if (!ok) {
-      x = Math.random() * (bw - pieceW);
-      y = Math.random() * (bh - pieceH);
+      x = Math.random() * (worldW - pieceW);
+      y = Math.random() * (worldH - pieceH);
     }
 
     out.push({ x, y });
@@ -297,22 +415,28 @@ function scatter(n, bw, bh) {
 }
 
 /* ══════════════════════════════════════
-   DRAG START
+   DRAG START (КУСОЧЕК)
 ══════════════════════════════════════ */
-function onDown(e) {
-  if (e.type === 'touchstart') e.preventDefault();
-  if (drag) return;
+function onPieceDown(e) {
+  if (e.type === 'touchstart') {
+    // Pinch-zoom приоритетнее, чем drag кусочка
+    if (e.touches.length >= 2) {
+      startPinch(e);
+      return;
+    }
+    e.preventDefault();
+  }
+  if (drag || pan || pinch) return;
   if (puzzleComplete()) return;
 
   const piece = e.currentTarget;
   if (piece.dataset.snapped === '1') return;
 
-  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+  // Останавливаем всплытие, чтобы не запустилось панорамирование на board
+  e.stopPropagation();
 
-  const br = board.getBoundingClientRect();
-  const bx = clientX - br.left;
-  const by = clientY - br.top;
+  const sp = evtBoardPos(e);
+  const wp = screenToWorld(sp.x, sp.y);
 
   const origLeft = parseFloat(piece.style.left);
   const origTop  = parseFloat(piece.style.top);
@@ -321,8 +445,8 @@ function onDown(e) {
     piece,
     origLeft,
     origTop,
-    startBX: bx,
-    startBY: by,
+    startWX: wp.x,
+    startWY: wp.y,
   };
 
   piece.classList.add('dragging');
@@ -330,105 +454,217 @@ function onDown(e) {
 }
 
 /* ══════════════════════════════════════
-   DRAG MOVE
+   PAN / DRAG / PINCH MOVE
 ══════════════════════════════════════ */
 document.addEventListener('mousemove', onMove);
 document.addEventListener('touchmove', onMove, { passive: false });
 
 function onMove(e) {
-  if (!drag) return;
-  if (e.type === 'touchmove') e.preventDefault();
+  // Pinch-zoom (приоритет)
+  if (pinch && e.type === 'touchmove' && e.touches.length >= 2) {
+    e.preventDefault();
+    updatePinch(e);
+    return;
+  }
 
-  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+  if (drag) {
+    if (e.type === 'touchmove') e.preventDefault();
+    const sp = evtBoardPos(e);
+    const wp = screenToWorld(sp.x, sp.y);
 
-  const br = board.getBoundingClientRect();
-  const bx = clientX - br.left;
-  const by = clientY - br.top;
+    const ddx = wp.x - drag.startWX;
+    const ddy = wp.y - drag.startWY;
 
-  const ddx = bx - drag.startBX;
-  const ddy = by - drag.startBY;
+    drag.piece.style.left = Math.max(0, Math.min(drag.origLeft + ddx, worldW - pieceW)) + 'px';
+    drag.piece.style.top  = Math.max(0, Math.min(drag.origTop  + ddy, worldH - pieceH)) + 'px';
+    return;
+  }
 
-  const bw = board.offsetWidth;
-  const bh = board.offsetHeight;
-
-  drag.piece.style.left = Math.max(0, Math.min(drag.origLeft + ddx, bw - pieceW)) + 'px';
-  drag.piece.style.top  = Math.max(0, Math.min(drag.origTop  + ddy, bh - pieceH)) + 'px';
+  if (pan) {
+    if (e.type === 'touchmove') e.preventDefault();
+    const sp = evtBoardPos(e);
+    panX = pan.startPanX + (sp.x - pan.startSX);
+    panY = pan.startPanY + (sp.y - pan.startSY);
+    clampPan();
+    applyTransform();
+    return;
+  }
 }
 
 /* ══════════════════════════════════════
-   DRAG END
+   END (mouseup / touchend)
 ══════════════════════════════════════ */
 document.addEventListener('mouseup', onUp);
 document.addEventListener('touchend', onUp, { passive: false });
+document.addEventListener('touchcancel', onUp, { passive: false });
 
-function onUp() {
-  if (!drag) return;
-
-  const piece = drag.piece;
-  piece.classList.remove('dragging');
-  piece.style.zIndex = '';
-
-  const dist = Math.hypot(
-    parseFloat(piece.style.left) - parseFloat(piece.dataset.cx),
-    parseFloat(piece.style.top)  - parseFloat(piece.dataset.cy)
-  );
-
-  if (dist < CONFIG.snapDist) {
-    doSnap(piece);
+function onUp(e) {
+  // Закончилось pinch-движение
+  if (pinch) {
+    if (!e.touches || e.touches.length < 2) {
+      pinch = null;
+    }
+    // Если остался один палец — не запускаем pan/drag, ждём следующего жеста
+    return;
   }
 
-  drag = null;
+  if (drag) {
+    const piece = drag.piece;
+    piece.classList.remove('dragging');
+    piece.style.zIndex = '';
+
+    const dist = Math.hypot(
+      parseFloat(piece.style.left) - parseFloat(piece.dataset.cx),
+      parseFloat(piece.style.top)  - parseFloat(piece.dataset.cy)
+    );
+
+    if (dist < CONFIG.snapDist) {
+      doSnap(piece);
+    }
+    drag = null;
+    return;
+  }
+
+  if (pan) {
+    pan = null;
+    board.classList.remove('panning');
+  }
 }
 
 /* ══════════════════════════════════════
-   ПРИЛИПАНИЕ И ФИКСАЦИЯ ДЕТАЛИ
+   ПАНОРАМИРОВАНИЕ ПО BOARD
+   (если клик/тач НЕ по кусочку)
 ══════════════════════════════════════ */
-function doSnap(piece) {
-  piece.dataset.snapped = '1';
+board.addEventListener('mousedown', onBoardDown);
+board.addEventListener('touchstart', onBoardDown, { passive: false });
 
-  piece.style.transition = `left ${CONFIG.snapMs}ms ease-out, top ${CONFIG.snapMs}ms ease-out`;
-  piece.style.left = piece.dataset.cx + 'px';
-  piece.style.top  = piece.dataset.cy + 'px';
+function onBoardDown(e) {
+  // Если жмут на кусочек — он сам обработает (stopPropagation)
+  if (e.target.closest('.piece')) return;
+  // Игнорируем клики по HUD
+  if (e.target.closest('#zoom-hud')) return;
 
-  piece.classList.remove('snap-flash');
-  void piece.offsetWidth;
-  piece.classList.add('snap-flash');
-  piece.style.zIndex = '3';
+  if (e.type === 'touchstart') {
+    if (e.touches.length >= 2) {
+      startPinch(e);
+      return;
+    }
+    e.preventDefault();
+  }
+  if (drag || pan || pinch) return;
 
-  playSnap();
-
-  setTimeout(() => {
-    piece.style.transition = '';
-    piece.classList.remove('snap-flash');
-    piece.classList.add('locked');
-  }, CONFIG.snapMs + 80);
+  const sp = evtBoardPos(e);
+  pan = {
+    startSX: sp.x,
+    startSY: sp.y,
+    startPanX: panX,
+    startPanY: panY,
+  };
+  board.classList.add('panning');
 }
 
 /* ══════════════════════════════════════
-   ЗВУК ПРИЛИПАНИЯ
+   ОГРАНИЧЕНИЕ ПАНОРАМИРОВАНИЯ
+   (мир не «улетает» полностью за пределы board)
 ══════════════════════════════════════ */
-function playSnap() {
-  try {
-    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const osc  = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(900, audioCtx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(440, audioCtx.currentTime + 0.18);
-    gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.22);
-    osc.start(audioCtx.currentTime);
-    osc.stop(audioCtx.currentTime + 0.22);
-  } catch (_) {}
+function clampPan() {
+  const bw = board.offsetWidth;
+  const bh = board.offsetHeight;
+  const wW = worldW * zoom;
+  const wH = worldH * zoom;
+
+  // Если world меньше board — центрируем
+  // Иначе ограничиваем так, чтобы world всегда покрывал хотя бы часть viewport
+  const margin = 80; // допускаем «вылет» world на 80px за край
+
+  if (wW <= bw) {
+    panX = (bw - wW) / 2;
+  } else {
+    const minX = bw - wW - margin;
+    const maxX = margin;
+    panX = Math.max(minX, Math.min(panX, maxX));
+  }
+
+  if (wH <= bh) {
+    panY = (bh - wH) / 2;
+  } else {
+    const minY = bh - wH - margin;
+    const maxY = margin;
+    panY = Math.max(minY, Math.min(panY, maxY));
+  }
 }
 
 /* ══════════════════════════════════════
-   ЗАПУСК
+   ЗУМ КОЛЁСИКОМ
 ══════════════════════════════════════ */
-init();
-</script>
-</body>
-</html>
+board.addEventListener('wheel', onWheel, { passive: false });
+
+function onWheel(e) {
+  e.preventDefault();
+  const sp = evtBoardPos(e);
+  const factor = e.deltaY < 0 ? CONFIG.zoomStep : 1 / CONFIG.zoomStep;
+  zoomAt(sp.x, sp.y, factor);
+}
+
+/* ══════════════════════════════════════
+   ЗУМ В ТОЧКЕ
+══════════════════════════════════════ */
+function zoomAt(sx, sy, factor) {
+  const newZoom = Math.max(CONFIG.minZoom, Math.min(zoom * factor, CONFIG.maxZoom));
+  if (newZoom === zoom) return;
+
+  // Сохраняем точку под курсором: world-координата (sx, sy) до и после должна совпасть
+  const wp = screenToWorld(sx, sy);
+  zoom = newZoom;
+  panX = sx - wp.x * zoom;
+  panY = sy - wp.y * zoom;
+  clampPan();
+  applyTransform();
+}
+
+/* ══════════════════════════════════════
+   PINCH-ZOOM (два пальца)
+══════════════════════════════════════ */
+function startPinch(e) {
+  // Если в этот момент тащим кусочек — отменяем drag
+  if (drag) {
+    drag.piece.classList.remove('dragging');
+    drag.piece.style.zIndex = '';
+    drag = null;
+  }
+  if (pan) {
+    pan = null;
+    board.classList.remove('panning');
+  }
+
+  const t1 = e.touches[0];
+  const t2 = e.touches[1];
+  const br = board.getBoundingClientRect();
+
+  const x1 = t1.clientX - br.left;
+  const y1 = t1.clientY - br.top;
+  const x2 = t2.clientX - br.left;
+  const y2 = t2.clientY - br.top;
+
+  pinch = {
+    startDist: Math.hypot(x2 - x1, y2 - y1),
+    startZoom: zoom,
+    startPanX: panX,
+    startPanY: panY,
+    startCenterX: (x1 + x2) / 2,
+    startCenterY: (y1 + y2) / 2,
+    startWorld: screenToWorld((x1 + x2) / 2, (y1 + y2) / 2),
+  };
+}
+
+function updatePinch(e) {
+  const t1 = e.touches[0];
+  const t2 = e.touches[1];
+  const br = board.getBoundingClientRect();
+
+  const x1 = t1.clientX - br.left;
+  const y1 = t1.clientY - br.top;
+  const x2 = t2.clientX - br.left;
+  const y2 = t2.clientY - br.top;
+
+  const dist = Math
