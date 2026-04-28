@@ -25,7 +25,6 @@ body {
   height: 100vh;
 }
 
-/* ── HEADER ── */
 header {
   flex: 0 0 auto;
   height: 60px;
@@ -35,7 +34,6 @@ header {
   padding: 0 18px;
   background: #0f2240;
   border-bottom: 1px solid rgba(233, 69, 96, 0.35);
-  position: relative;
   z-index: 8000;
 }
 
@@ -44,16 +42,13 @@ header p {
   line-height: 1.5;
   text-align: center;
   color: #8fa5c0;
-  letter-spacing: 0.015em;
 }
 
 header strong {
   color: #e94560;
   font-weight: 700;
-  letter-spacing: 0.04em;
 }
 
-/* ── BOARD (видимая область — viewport) ── */
 #board {
   flex: 1 1 auto;
   position: relative;
@@ -62,11 +57,8 @@ header strong {
   touch-action: none;
 }
 
-#board.panning {
-  cursor: grabbing;
-}
+#board.panning { cursor: grabbing; }
 
-/* ── WORLD (трансформируется при зуме/панорамировании) ── */
 #world {
   position: absolute;
   left: 0;
@@ -75,14 +67,12 @@ header strong {
   will-change: transform;
 }
 
-/* ── TARGET FRAME (область сборки пазла) ── */
 #target {
   position: absolute;
   border: 1px dashed rgba(255, 255, 255, 0.25);
   background-image: url('secret2.png');
   background-repeat: no-repeat;
   background-size: 100% 100%;
-  background-position: center center;
   pointer-events: none;
   z-index: 0;
 }
@@ -95,7 +85,6 @@ header strong {
   z-index: 1;
 }
 
-/* ── PIECES ── */
 .piece {
   position: absolute;
   background-repeat: no-repeat;
@@ -105,7 +94,6 @@ header strong {
     0 2px 8px rgba(0, 0, 0, 0.55);
   will-change: left, top;
   touch-action: none;
-  -webkit-touch-callout: none;
   z-index: 2;
   transition: box-shadow 0.12s;
 }
@@ -130,18 +118,14 @@ header strong {
   pointer-events: none;
 }
 
-/* ── SNAP ANIMATION ── */
 @keyframes snapFlash {
-  0%   { transform: scale(1);    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.07), 0 2px 8px rgba(0,0,0,0.55); }
+  0%   { transform: scale(1); }
   38%  { transform: scale(1.05); box-shadow: inset 0 0 0 2px rgba(255,255,255,0.3), 0 0 22px rgba(255,255,255,0.7), 0 0 10px rgba(233,69,96,0.55); }
-  100% { transform: scale(1);    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.07), 0 2px 8px rgba(0,0,0,0.55); }
+  100% { transform: scale(1); }
 }
 
-.piece.snap-flash {
-  animation: snapFlash 300ms ease-out forwards;
-}
+.piece.snap-flash { animation: snapFlash 300ms ease-out forwards; }
 
-/* ── ZOOM HUD ── */
 #zoom-hud {
   position: absolute;
   bottom: 14px;
@@ -162,19 +146,12 @@ header strong {
   font-weight: 700;
   border-radius: 6px;
   cursor: pointer;
-  transition: background 0.15s;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
-.zoom-btn:hover {
-  background: rgba(40, 65, 110, 0.95);
-}
-
-.zoom-btn:active {
-  background: rgba(60, 85, 130, 1);
-}
+.zoom-btn:hover { background: rgba(40, 65, 110, 0.95); }
 </style>
 </head>
 <body>
@@ -189,37 +166,28 @@ header strong {
   </div>
 
   <div id="zoom-hud">
-    <button class="zoom-btn" id="zoom-out" title="Отдалить">−</button>
-    <button class="zoom-btn" id="zoom-reset" title="Сброс" style="font-size:13px">⟲</button>
-    <button class="zoom-btn" id="zoom-in" title="Приблизить">+</button>
+    <button class="zoom-btn" id="zoom-out">−</button>
+    <button class="zoom-btn" id="zoom-reset" style="font-size:13px">⟲</button>
+    <button class="zoom-btn" id="zoom-in">+</button>
   </div>
 </div>
 
 <script>
 'use strict';
 
-/* ══════════════════════════════════════
-   КОНФИГУРАЦИЯ
-══════════════════════════════════════ */
 const CONFIG = {
   imageUrl:    'secret.png',
   bgImageUrl:  'secret2.png',
   cols:        6,
   rows:        5,
-  snapDist:    25,        // px (в координатах world) — дистанция прилипания
+  snapDist:    25,
   snapMs:      200,
-  // Размер «мира» — большой, чтобы было куда раскидать кусочки и куда панорамировать.
-  // Картинка квадратная 1:1, и берётся как 70% от меньшей стороны видимой области.
-  worldPad:    0.6,       // отступ вокруг рамки в долях от её стороны (0.6 → +60% с каждой стороны)
-  // Зум
+  worldPad:    0.6,
   minZoom:     0.4,
   maxZoom:     3.0,
-  zoomStep:    1.15,      // множитель на одно колёсико/кнопку
+  zoomStep:    1.15,
 };
 
-/* ══════════════════════════════════════
-   DOM-элементы
-══════════════════════════════════════ */
 const board    = document.getElementById('board');
 const world    = document.getElementById('world');
 const targetEl = document.getElementById('target');
@@ -227,32 +195,20 @@ const btnIn    = document.getElementById('zoom-in');
 const btnOut   = document.getElementById('zoom-out');
 const btnReset = document.getElementById('zoom-reset');
 
-/* ══════════════════════════════════════
-   ГЛОБАЛЬНОЕ СОСТОЯНИЕ
-══════════════════════════════════════ */
-let pieces  = [];
-let pieceW  = 0;
-let pieceH  = 0;
-let tRect   = {};            // координаты рамки сборки в системе world
-let worldW  = 0;
-let worldH  = 0;
+let pieces = [];
+let pieceW = 0, pieceH = 0;
+let tRect  = {};
+let worldW = 0, worldH = 0;
 
-// Состояние зума и панорамирования (трансформация world)
-let zoom = 1;
-let panX = 0;   // смещение world внутри board (в screen-px)
-let panY = 0;
+let zoom = 1, panX = 0, panY = 0;
+let initialZoom = 1, initialPanX = 0, initialPanY = 0;
 
-let drag = null;             // активный drag кусочка
-let pan  = null;             // активное панорамирование
-
-// Pinch-zoom (два пальца)
+let drag = null;
+let pan  = null;
 let pinch = null;
 
 let audioCtx = null;
 
-/* ══════════════════════════════════════
-   ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-══════════════════════════════════════ */
 function puzzleComplete() {
   return pieces.length > 0 && pieces.every(p => p.dataset.snapped === '1');
 }
@@ -261,59 +217,37 @@ function applyTransform() {
   world.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
 }
 
-// Перевод screen-координат (внутри board) → координаты world
 function screenToWorld(sx, sy) {
-  return {
-    x: (sx - panX) / zoom,
-    y: (sy - panY) / zoom,
-  };
+  return { x: (sx - panX) / zoom, y: (sy - panY) / zoom };
 }
 
-// Получить координаты события в системе board (без учёта зума)
 function evtBoardPos(e) {
   const t = e.touches ? e.touches[0] : e;
   const br = board.getBoundingClientRect();
   return { x: t.clientX - br.left, y: t.clientY - br.top };
 }
 
-/* ══════════════════════════════════════
-   ИНИЦИАЛИЗАЦИЯ
-══════════════════════════════════════ */
 function init() {
   pieces.forEach(p => p.remove());
   pieces = [];
-  drag = null;
-  pan  = null;
-  pinch = null;
-  zoom = 1;
-  panX = 0;
-  panY = 0;
-
+  drag = null; pan = null; pinch = null;
   build();
 }
 
-/* ══════════════════════════════════════
-   ПОСТРОЕНИЕ ПАЗЛА (квадрат 1:1)
-══════════════════════════════════════ */
 function build() {
   const bw = board.offsetWidth;
   const bh = board.offsetHeight;
 
-  // Сторона рамки сборки = меньшая из (70% ширины, 80% высоты), картинка квадратная
+  // Картинка квадратная 1:1
   const side = Math.min(bw * 0.70, bh * 0.80);
 
-  // Размер «мира»: рамка + отступы вокруг (есть место для разброса деталей)
   const pad = side * CONFIG.worldPad;
   worldW = side + pad * 2;
   worldH = side + pad * 2;
 
-  // Рамка сборки — в центре мира
-  const tl = pad;
-  const tt = pad;
-
+  const tl = pad, tt = pad;
   tRect = { l: tl, t: tt, w: side, h: side };
 
-  // Применяем геометрию
   world.style.width  = worldW + 'px';
   world.style.height = worldH + 'px';
 
@@ -325,13 +259,14 @@ function build() {
   pieceW = side / CONFIG.cols;
   pieceH = side / CONFIG.rows;
 
-  // Стартовый зум: чтобы рамка целиком влезала в board с небольшим запасом
   zoom = Math.min(bw / worldW, bh / worldH);
   zoom = Math.max(CONFIG.minZoom, Math.min(zoom, CONFIG.maxZoom));
-
-  // Центрируем world в board
   panX = (bw - worldW * zoom) / 2;
   panY = (bh - worldH * zoom) / 2;
+
+  initialZoom = zoom;
+  initialPanX = panX;
+  initialPanY = panY;
 
   applyTransform();
   makePieces();
@@ -346,14 +281,14 @@ function makePieces() {
       const el  = document.createElement('div');
       el.className = 'piece';
 
-      el.dataset.col     = col;
-      el.dataset.row     = row;
-      el.dataset.cx      = tRect.l + col * pieceW;
-      el.dataset.cy      = tRect.t + row * pieceH;
+      el.dataset.col = col;
+      el.dataset.row = row;
+      el.dataset.cx  = tRect.l + col * pieceW;
+      el.dataset.cy  = tRect.t + row * pieceH;
       el.dataset.snapped = '0';
 
-      el.style.width              = pieceW + 'px';
-      el.style.height             = pieceH + 'px';
+      el.style.width  = pieceW + 'px';
+      el.style.height = pieceH + 'px';
       el.style.backgroundImage    = `url('${CONFIG.imageUrl}')`;
       el.style.backgroundSize     = `${tRect.w}px ${tRect.h}px`;
       el.style.backgroundPosition = `-${col * pieceW}px -${row * pieceH}px`;
@@ -371,9 +306,6 @@ function makePieces() {
   }
 }
 
-/* ══════════════════════════════════════
-   РАЗБРОС ВОКРУГ РАМКИ В МИРЕ
-══════════════════════════════════════ */
 function scatter(n) {
   const { l, t, w, h } = tRect;
   const pad = 8;
@@ -388,42 +320,30 @@ function scatter(n) {
 
   for (let i = 0; i < n; i++) {
     let x = 0, y = 0;
-
     const shuffled = regions
       .map(r => ({ r, sort: Math.random() }))
       .sort((a, b) => a.sort - b.sort)
       .map(s => s.r);
 
-    let ok = false;
-    for (const reg of shuffled) {
+    if (shuffled.length) {
+      const reg = shuffled[0];
       x = reg.xl + Math.random() * (reg.xr - reg.xl);
       y = reg.yt + Math.random() * (reg.yb - reg.yt);
-      x = Math.max(0, Math.min(x, worldW - pieceW));
-      y = Math.max(0, Math.min(y, worldH - pieceH));
-      ok = true;
-      break;
-    }
-
-    if (!ok) {
+    } else {
       x = Math.random() * (worldW - pieceW);
       y = Math.random() * (worldH - pieceH);
     }
-
+    x = Math.max(0, Math.min(x, worldW - pieceW));
+    y = Math.max(0, Math.min(y, worldH - pieceH));
     out.push({ x, y });
   }
   return out;
 }
 
-/* ══════════════════════════════════════
-   DRAG START (КУСОЧЕК)
-══════════════════════════════════════ */
+/* ── DRAG START (КУСОЧЕК) ── */
 function onPieceDown(e) {
   if (e.type === 'touchstart') {
-    // Pinch-zoom приоритетнее, чем drag кусочка
-    if (e.touches.length >= 2) {
-      startPinch(e);
-      return;
-    }
+    if (e.touches.length >= 2) { startPinch(e); return; }
     e.preventDefault();
   }
   if (drag || pan || pinch) return;
@@ -432,35 +352,27 @@ function onPieceDown(e) {
   const piece = e.currentTarget;
   if (piece.dataset.snapped === '1') return;
 
-  // Останавливаем всплытие, чтобы не запустилось панорамирование на board
   e.stopPropagation();
 
   const sp = evtBoardPos(e);
   const wp = screenToWorld(sp.x, sp.y);
 
-  const origLeft = parseFloat(piece.style.left);
-  const origTop  = parseFloat(piece.style.top);
-
   drag = {
     piece,
-    origLeft,
-    origTop,
-    startWX: wp.x,
-    startWY: wp.y,
+    origLeft: parseFloat(piece.style.left),
+    origTop:  parseFloat(piece.style.top),
+    startWX:  wp.x,
+    startWY:  wp.y,
   };
 
   piece.classList.add('dragging');
   piece.style.zIndex = '501';
 }
 
-/* ══════════════════════════════════════
-   PAN / DRAG / PINCH MOVE
-══════════════════════════════════════ */
 document.addEventListener('mousemove', onMove);
 document.addEventListener('touchmove', onMove, { passive: false });
 
 function onMove(e) {
-  // Pinch-zoom (приоритет)
   if (pinch && e.type === 'touchmove' && e.touches.length >= 2) {
     e.preventDefault();
     updatePinch(e);
@@ -471,10 +383,8 @@ function onMove(e) {
     if (e.type === 'touchmove') e.preventDefault();
     const sp = evtBoardPos(e);
     const wp = screenToWorld(sp.x, sp.y);
-
     const ddx = wp.x - drag.startWX;
     const ddy = wp.y - drag.startWY;
-
     drag.piece.style.left = Math.max(0, Math.min(drag.origLeft + ddx, worldW - pieceW)) + 'px';
     drag.piece.style.top  = Math.max(0, Math.min(drag.origTop  + ddy, worldH - pieceH)) + 'px';
     return;
@@ -487,24 +397,16 @@ function onMove(e) {
     panY = pan.startPanY + (sp.y - pan.startSY);
     clampPan();
     applyTransform();
-    return;
   }
 }
 
-/* ══════════════════════════════════════
-   END (mouseup / touchend)
-══════════════════════════════════════ */
 document.addEventListener('mouseup', onUp);
 document.addEventListener('touchend', onUp, { passive: false });
 document.addEventListener('touchcancel', onUp, { passive: false });
 
 function onUp(e) {
-  // Закончилось pinch-движение
   if (pinch) {
-    if (!e.touches || e.touches.length < 2) {
-      pinch = null;
-    }
-    // Если остался один палец — не запускаем pan/drag, ждём следующего жеста
+    if (!e.touches || e.touches.length < 2) pinch = null;
     return;
   }
 
@@ -517,10 +419,7 @@ function onUp(e) {
       parseFloat(piece.style.left) - parseFloat(piece.dataset.cx),
       parseFloat(piece.style.top)  - parseFloat(piece.dataset.cy)
     );
-
-    if (dist < CONFIG.snapDist) {
-      doSnap(piece);
-    }
+    if (dist < CONFIG.snapDist) doSnap(piece);
     drag = null;
     return;
   }
@@ -531,24 +430,16 @@ function onUp(e) {
   }
 }
 
-/* ══════════════════════════════════════
-   ПАНОРАМИРОВАНИЕ ПО BOARD
-   (если клик/тач НЕ по кусочку)
-══════════════════════════════════════ */
+/* ── PAN по board ── */
 board.addEventListener('mousedown', onBoardDown);
 board.addEventListener('touchstart', onBoardDown, { passive: false });
 
 function onBoardDown(e) {
-  // Если жмут на кусочек — он сам обработает (stopPropagation)
   if (e.target.closest('.piece')) return;
-  // Игнорируем клики по HUD
   if (e.target.closest('#zoom-hud')) return;
 
   if (e.type === 'touchstart') {
-    if (e.touches.length >= 2) {
-      startPinch(e);
-      return;
-    }
+    if (e.touches.length >= 2) { startPinch(e); return; }
     e.preventDefault();
   }
   if (drag || pan || pinch) return;
@@ -563,40 +454,21 @@ function onBoardDown(e) {
   board.classList.add('panning');
 }
 
-/* ══════════════════════════════════════
-   ОГРАНИЧЕНИЕ ПАНОРАМИРОВАНИЯ
-   (мир не «улетает» полностью за пределы board)
-══════════════════════════════════════ */
 function clampPan() {
   const bw = board.offsetWidth;
   const bh = board.offsetHeight;
   const wW = worldW * zoom;
   const wH = worldH * zoom;
+  const margin = 80;
 
-  // Если world меньше board — центрируем
-  // Иначе ограничиваем так, чтобы world всегда покрывал хотя бы часть viewport
-  const margin = 80; // допускаем «вылет» world на 80px за край
+  if (wW <= bw) panX = (bw - wW) / 2;
+  else panX = Math.max(bw - wW - margin, Math.min(panX, margin));
 
-  if (wW <= bw) {
-    panX = (bw - wW) / 2;
-  } else {
-    const minX = bw - wW - margin;
-    const maxX = margin;
-    panX = Math.max(minX, Math.min(panX, maxX));
-  }
-
-  if (wH <= bh) {
-    panY = (bh - wH) / 2;
-  } else {
-    const minY = bh - wH - margin;
-    const maxY = margin;
-    panY = Math.max(minY, Math.min(panY, maxY));
-  }
+  if (wH <= bh) panY = (bh - wH) / 2;
+  else panY = Math.max(bh - wH - margin, Math.min(panY, margin));
 }
 
-/* ══════════════════════════════════════
-   ЗУМ КОЛЁСИКОМ
-══════════════════════════════════════ */
+/* ── ЗУМ ── */
 board.addEventListener('wheel', onWheel, { passive: false });
 
 function onWheel(e) {
@@ -606,14 +478,9 @@ function onWheel(e) {
   zoomAt(sp.x, sp.y, factor);
 }
 
-/* ══════════════════════════════════════
-   ЗУМ В ТОЧКЕ
-══════════════════════════════════════ */
 function zoomAt(sx, sy, factor) {
   const newZoom = Math.max(CONFIG.minZoom, Math.min(zoom * factor, CONFIG.maxZoom));
   if (newZoom === zoom) return;
-
-  // Сохраняем точку под курсором: world-координата (sx, sy) до и после должна совпасть
   const wp = screenToWorld(sx, sy);
   zoom = newZoom;
   panX = sx - wp.x * zoom;
@@ -622,11 +489,21 @@ function zoomAt(sx, sy, factor) {
   applyTransform();
 }
 
-/* ══════════════════════════════════════
-   PINCH-ZOOM (два пальца)
-══════════════════════════════════════ */
+btnIn.addEventListener('click', () => {
+  zoomAt(board.offsetWidth / 2, board.offsetHeight / 2, CONFIG.zoomStep);
+});
+btnOut.addEventListener('click', () => {
+  zoomAt(board.offsetWidth / 2, board.offsetHeight / 2, 1 / CONFIG.zoomStep);
+});
+btnReset.addEventListener('click', () => {
+  zoom = initialZoom;
+  panX = initialPanX;
+  panY = initialPanY;
+  applyTransform();
+});
+
+/* ── PINCH ── */
 function startPinch(e) {
-  // Если в этот момент тащим кусочек — отменяем drag
   if (drag) {
     drag.piece.classList.remove('dragging');
     drag.piece.style.zIndex = '';
@@ -637,34 +514,80 @@ function startPinch(e) {
     board.classList.remove('panning');
   }
 
-  const t1 = e.touches[0];
-  const t2 = e.touches[1];
+  const t1 = e.touches[0], t2 = e.touches[1];
   const br = board.getBoundingClientRect();
-
-  const x1 = t1.clientX - br.left;
-  const y1 = t1.clientY - br.top;
-  const x2 = t2.clientX - br.left;
-  const y2 = t2.clientY - br.top;
+  const x1 = t1.clientX - br.left, y1 = t1.clientY - br.top;
+  const x2 = t2.clientX - br.left, y2 = t2.clientY - br.top;
+  const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
 
   pinch = {
     startDist: Math.hypot(x2 - x1, y2 - y1),
     startZoom: zoom,
-    startPanX: panX,
-    startPanY: panY,
-    startCenterX: (x1 + x2) / 2,
-    startCenterY: (y1 + y2) / 2,
-    startWorld: screenToWorld((x1 + x2) / 2, (y1 + y2) / 2),
+    centerSX: cx,
+    centerSY: cy,
+    startWorld: screenToWorld(cx, cy),
   };
 }
 
 function updatePinch(e) {
-  const t1 = e.touches[0];
-  const t2 = e.touches[1];
+  const t1 = e.touches[0], t2 = e.touches[1];
   const br = board.getBoundingClientRect();
+  const x1 = t1.clientX - br.left, y1 = t1.clientY - br.top;
+  const x2 = t2.clientX - br.left, y2 = t2.clientY - br.top;
 
-  const x1 = t1.clientX - br.left;
-  const y1 = t1.clientY - br.top;
-  const x2 = t2.clientX - br.left;
-  const y2 = t2.clientY - br.top;
+  const dist = Math.hypot(x2 - x1, y2 - y1);
+  const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
 
-  const dist = Math
+  let newZoom = pinch.startZoom * (dist / pinch.startDist);
+  newZoom = Math.max(CONFIG.minZoom, Math.min(newZoom, CONFIG.maxZoom));
+
+  zoom = newZoom;
+  // Чтобы точка под пальцами оставалась той же в мире
+  panX = cx - pinch.startWorld.x * zoom;
+  panY = cy - pinch.startWorld.y * zoom;
+  clampPan();
+  applyTransform();
+}
+
+/* ── SNAP ── */
+function doSnap(piece) {
+  piece.dataset.snapped = '1';
+  piece.style.transition = `left ${CONFIG.snapMs}ms ease-out, top ${CONFIG.snapMs}ms ease-out`;
+  piece.style.left = piece.dataset.cx + 'px';
+  piece.style.top  = piece.dataset.cy + 'px';
+
+  piece.classList.remove('snap-flash');
+  void piece.offsetWidth;
+  piece.classList.add('snap-flash');
+  piece.style.zIndex = '3';
+
+  playSnap();
+
+  setTimeout(() => {
+    piece.style.transition = '';
+    piece.classList.remove('snap-flash');
+    piece.classList.add('locked');
+  }, CONFIG.snapMs + 80);
+}
+
+function playSnap() {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc  = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(900, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(440, audioCtx.currentTime + 0.18);
+    gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.22);
+    osc.start(audioCtx.currentTime);
+    osc.stop(audioCtx.currentTime + 0.22);
+  } catch (_) {}
+}
+
+init();
+</script>
+</body>
+</html>
