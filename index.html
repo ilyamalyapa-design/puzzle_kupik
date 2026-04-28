@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -93,25 +92,29 @@ header strong {
   box-shadow:
     inset 0 0 0 1px rgba(255, 255, 255, 0.07),
     0 2px 8px rgba(0, 0, 0, 0.55);
-  will-change: left, top;
+  will-change: left, top, transform;
   touch-action: none;
   z-index: 2;
-  transition: box-shadow 0.12s;
+  transform-origin: center center;
+  transition: box-shadow 0.12s, transform 0.14s ease-out;
 }
 
 .piece:hover {
   box-shadow:
     inset 0 0 0 1px rgba(255, 255, 255, 0.12),
     0 5px 18px rgba(0, 0, 0, 0.75);
-  z-index: 3 !important;
 }
 
+/* ── Активный (поднятый) кусочек ── */
 .piece.dragging {
   cursor: grabbing !important;
+  transform: scale(1.08);
   box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.15),
-    0 10px 36px rgba(0, 0, 0, 0.9);
-  transition: none;
+    inset 0 0 0 1px rgba(255, 255, 255, 0.22),
+    0 18px 42px rgba(0, 0, 0, 0.75),
+    0 0 0 1px rgba(233, 69, 96, 0.35);
+  transition: transform 0.14s ease-out, box-shadow 0.14s ease-out;
+  filter: brightness(1.05);
 }
 
 .piece.locked {
@@ -153,6 +156,119 @@ header strong {
 }
 
 .zoom-btn:hover { background: rgba(40, 65, 110, 0.95); }
+
+/* ── Онбординг ── */
+#onboard-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 18, 36, 0.78);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  padding: 20px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease-out;
+}
+
+#onboard-overlay.show {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+#onboard-card {
+  max-width: 380px;
+  width: 100%;
+  background: linear-gradient(160deg, #1a2a4a 0%, #142039 100%);
+  border: 1px solid rgba(233, 69, 96, 0.35);
+  border-radius: 12px;
+  padding: 24px 22px 20px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  transform: scale(0.92);
+  transition: transform 0.25s cubic-bezier(.2,.9,.3,1.2);
+}
+
+#onboard-overlay.show #onboard-card {
+  transform: scale(1);
+}
+
+#onboard-card h2 {
+  font-size: 18px;
+  color: #e94560;
+  margin-bottom: 14px;
+  letter-spacing: 0.5px;
+}
+
+#onboard-card ul {
+  list-style: none;
+  margin-bottom: 18px;
+}
+
+#onboard-card li {
+  font-size: 13px;
+  line-height: 1.55;
+  color: #c5d5e8;
+  padding: 7px 0 7px 28px;
+  position: relative;
+}
+
+#onboard-card li::before {
+  content: attr(data-icon);
+  position: absolute;
+  left: 0;
+  top: 6px;
+  font-size: 16px;
+}
+
+#onboard-card button {
+  width: 100%;
+  padding: 11px;
+  background: #e94560;
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  letter-spacing: 0.5px;
+  transition: background 0.15s;
+}
+
+#onboard-card button:hover { background: #f25774; }
+
+/* Тултип-подсказка после онбординга */
+#hint-tooltip {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(15, 34, 64, 0.95);
+  border: 1px solid rgba(233, 69, 96, 0.5);
+  color: #fff;
+  padding: 10px 16px;
+  border-radius: 22px;
+  font-size: 13px;
+  z-index: 9500;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s;
+  white-space: nowrap;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.5);
+}
+
+#hint-tooltip.show {
+  opacity: 1;
+  animation: hintPulse 1.6s ease-in-out infinite;
+}
+
+@keyframes hintPulse {
+  0%, 100% { transform: translate(-50%, -50%) scale(1); }
+  50%      { transform: translate(-50%, -50%) scale(1.06); }
+}
 </style>
 </head>
 <body>
@@ -172,6 +288,21 @@ header strong {
     <button class="zoom-btn" id="zoom-in">+</button>
   </div>
 </div>
+
+<!-- Онбординг -->
+<div id="onboard-overlay">
+  <div id="onboard-card">
+    <h2>КАК ИГРАТЬ</h2>
+    <ul>
+      <li data-icon="🧩">Перетаскивай кусочки на тёмный квадрат — они сами защёлкнутся на свои места</li>
+      <li data-icon="✋">Двигай поле, потянув за пустую область</li>
+      <li data-icon="🔍">Колёсико мыши или щипок двумя пальцами — масштаб. Кнопки справа внизу — то же самое</li>
+    </ul>
+    <button id="onboard-close">Понятно, поехали</button>
+  </div>
+</div>
+
+<div id="hint-tooltip">👆 Возьми кусочек и тащи</div>
 
 <script>
 'use strict';
@@ -196,6 +327,10 @@ const btnIn    = document.getElementById('zoom-in');
 const btnOut   = document.getElementById('zoom-out');
 const btnReset = document.getElementById('zoom-reset');
 
+const onboardOverlay = document.getElementById('onboard-overlay');
+const onboardClose   = document.getElementById('onboard-close');
+const hintTooltip    = document.getElementById('hint-tooltip');
+
 let pieces = [];
 let pieceW = 0, pieceH = 0;
 let tRect  = {};
@@ -209,6 +344,12 @@ let pan  = null;
 let pinch = null;
 
 let audioCtx = null;
+
+// Глобальный счётчик z-index, чтобы активный кусочек был всегда поверх
+let topZ = 100;
+
+// Флаг — было ли уже первое взаимодействие (чтобы прятать tooltip)
+let firstInteractionDone = false;
 
 function puzzleComplete() {
   return pieces.length > 0 && pieces.every(p => p.dataset.snapped === '1');
@@ -232,6 +373,7 @@ function init() {
   pieces.forEach(p => p.remove());
   pieces = [];
   drag = null; pan = null; pinch = null;
+  topZ = 100;
   build();
 }
 
@@ -239,7 +381,6 @@ function build() {
   const bw = board.offsetWidth;
   const bh = board.offsetHeight;
 
-  // Картинка квадратная 1:1
   const side = Math.min(bw * 0.70, bh * 0.80);
 
   const pad = side * CONFIG.worldPad;
@@ -355,6 +496,9 @@ function onPieceDown(e) {
 
   e.stopPropagation();
 
+  // Прячем подсказку при первом взаимодействии
+  hideHintTooltip();
+
   const sp = evtBoardPos(e);
   const wp = screenToWorld(sp.x, sp.y);
 
@@ -367,7 +511,8 @@ function onPieceDown(e) {
   };
 
   piece.classList.add('dragging');
-  piece.style.zIndex = '501';
+  // Поднимаем кусок выше всех — увеличиваем глобальный счётчик
+  piece.style.zIndex = String(++topZ);
 }
 
 document.addEventListener('mousemove', onMove);
@@ -414,7 +559,8 @@ function onUp(e) {
   if (drag) {
     const piece = drag.piece;
     piece.classList.remove('dragging');
-    piece.style.zIndex = '';
+    // НЕ обнуляем z-index — пусть последний поднятый остаётся выше остальных,
+    // пока следующий не пересилит счётчиком topZ.
 
     const dist = Math.hypot(
       parseFloat(piece.style.left) - parseFloat(piece.dataset.cx),
@@ -505,90 +651,3 @@ btnReset.addEventListener('click', () => {
 
 /* ── PINCH ── */
 function startPinch(e) {
-  if (drag) {
-    drag.piece.classList.remove('dragging');
-    drag.piece.style.zIndex = '';
-    drag = null;
-  }
-  if (pan) {
-    pan = null;
-    board.classList.remove('panning');
-  }
-
-  const t1 = e.touches[0], t2 = e.touches[1];
-  const br = board.getBoundingClientRect();
-  const x1 = t1.clientX - br.left, y1 = t1.clientY - br.top;
-  const x2 = t2.clientX - br.left, y2 = t2.clientY - br.top;
-  const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
-
-  pinch = {
-    startDist: Math.hypot(x2 - x1, y2 - y1),
-    startZoom: zoom,
-    centerSX: cx,
-    centerSY: cy,
-    startWorld: screenToWorld(cx, cy),
-  };
-}
-
-function updatePinch(e) {
-  const t1 = e.touches[0], t2 = e.touches[1];
-  const br = board.getBoundingClientRect();
-  const x1 = t1.clientX - br.left, y1 = t1.clientY - br.top;
-  const x2 = t2.clientX - br.left, y2 = t2.clientY - br.top;
-
-  const dist = Math.hypot(x2 - x1, y2 - y1);
-  const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
-
-  let newZoom = pinch.startZoom * (dist / pinch.startDist);
-  newZoom = Math.max(CONFIG.minZoom, Math.min(newZoom, CONFIG.maxZoom));
-
-  zoom = newZoom;
-  // Чтобы точка под пальцами оставалась той же в мире
-  panX = cx - pinch.startWorld.x * zoom;
-  panY = cy - pinch.startWorld.y * zoom;
-  clampPan();
-  applyTransform();
-}
-
-/* ── SNAP ── */
-function doSnap(piece) {
-  piece.dataset.snapped = '1';
-  piece.style.transition = `left ${CONFIG.snapMs}ms ease-out, top ${CONFIG.snapMs}ms ease-out`;
-  piece.style.left = piece.dataset.cx + 'px';
-  piece.style.top  = piece.dataset.cy + 'px';
-
-  piece.classList.remove('snap-flash');
-  void piece.offsetWidth;
-  piece.classList.add('snap-flash');
-  piece.style.zIndex = '3';
-
-  playSnap();
-
-  setTimeout(() => {
-    piece.style.transition = '';
-    piece.classList.remove('snap-flash');
-    piece.classList.add('locked');
-  }, CONFIG.snapMs + 80);
-}
-
-function playSnap() {
-  try {
-    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const osc  = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(900, audioCtx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(440, audioCtx.currentTime + 0.18);
-    gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.22);
-    osc.start(audioCtx.currentTime);
-    osc.stop(audioCtx.currentTime + 0.22);
-  } catch (_) {}
-}
-
-init();
-</script>
-</body>
-</html>
