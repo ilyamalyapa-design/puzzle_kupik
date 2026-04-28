@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Пазл с шифром</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  background: #1a1a2e;
+  color: #dde3f0;
+  font-family: 'Courier New', Courier, monospace;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* ── HEADER ── */
+header {
+  flex: 0 0 auto;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 18px;
+  background: #0f2240;
+  border-bottom: 1px solid rgba(233, 69, 96, 0.35);
+  position: relative;
+  z-index: 8000;
+}
+
+header p {
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+  color: #8fa5c0;
+  letter-spacing: 0.015em;
+}
+
+header strong {
+  color: #e94560;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+/* ── BOARD ── */
+#board {
+  flex: 1 1 auto;
+  position: relative;
+  overflow: hidden;
+}
+
+/* ── TARGET FRAME (область сборки пазла) ── */
+#target {
+  position: absolute;
+  border: 1px dashed rgba(255, 255, 255, 0.25);
+  background-image: url('secret2.png');
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  background-position: center center;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Затемняющий слой поверх фоновой картинки внутри рамки */
+#target::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 1;
+}
+
+/* ── PIECES ── */
+.piece {
+  position: absolute;
+  background-repeat: no-repeat;
+  cursor: grab;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.07),
+    0 2px 8px rgba(0, 0, 0, 0.55);
+  will-change: left, top;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  z-index: 2;
+  transition: box-shadow 0.12s;
+}
+
+.piece:hover {
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+    0 5px 18px rgba(0, 0, 0, 0.75);
+  z-index: 3 !important;
+}
+
+.piece.dragging {
+  cursor: grabbing !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.15),
+    0 10px 36px rgba(0, 0, 0, 0.9);
+  transition: none;
+}
+
+.piece.locked {
+  cursor: default !important;
+  pointer-events: none;
+}
+
+/* ── SNAP ANIMATION ── */
+@keyframes snapFlash {
+  0%   { transform: scale(1);    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.07), 0 2px 8px rgba(0,0,0,0.55); }
+  38%  { transform: scale(1.05); box-shadow: inset 0 0 0 2px rgba(255,255,255,0.3), 0 0 22px rgba(255,255,255,0.7), 0 0 10px rgba(233,69,96,0.55); }
+  100% { transform: scale(1);    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.07), 0 2px 8px rgba(0,0,0,0.55); }
+}
+
+.piece.snap-flash {
+  animation: snapFlash 300ms ease-out forwards;
+}
+</style>
+</head>
+<body>
+
+<header>
+  <p>Собери пазл и разгадай шифр. Ответ пришли личным сообщением в&nbsp;tg или mattermost <strong>@ilya_malyapa</strong></p>
+</header>
+
+<div id="board">
+  <div id="target"></div>
+</div>
+
+<script>
+'use strict';
+
+/* ══════════════════════════════════════
+   КОНФИГУРАЦИЯ
+══════════════════════════════════════ */
+const CONFIG = {
+  imageUrl:    'secret.png',    // картинка для пазла (со спрятанным шифром)
+  bgImageUrl:  'secret2.png',   // фоновая картинка-подсказка (без шифра) — ставится в рамке
+  cols:        6,
+  rows:        5,
+  snapDist:    25,              // px — дистанция прилипания
+  snapMs:      200,             // мс — длительность анимации прилипания
+};
+
+/* ══════════════════════════════════════
+   DOM-элементы
+══════════════════════════════════════ */
+const board    = document.getElementById('board');
+const targetEl = document.getElementById('target');
+
+/* ══════════════════════════════════════
+   ГЛОБАЛЬНОЕ СОСТОЯНИЕ
+══════════════════════════════════════ */
+let pieces  = [];
+let pieceW  = 0;
+let pieceH  = 0;
+let tRect   = {};
+
+let drag = null;
+let audioCtx = null;
+
+/* ══════════════════════════════════════
+   ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+══════════════════════════════════════ */
+function puzzleComplete() {
+  return pieces.length > 0 && pieces.every(p => p.dataset.snapped === '1');
+}
+
+/* ══════════════════════════════════════
+   ИНИЦИАЛИЗАЦИЯ
+══════════════════════════════════════ */
+function init() {
+  pieces.forEach(p => p.remove());
+  pieces = [];
+  drag = null;
+
+  const img = new Image();
+  img.onload  = () => build(img.naturalWidth / img.naturalHeight);
+  img.onerror = () => build(2);
+  img.src = CONFIG.imageUrl;
+}
+
+/* ══════════════════════════════════════
+   ПОСТРОЕНИЕ ПАЗЛА
+══════════════════════════════════════ */
+function build(ratio) {
+  const bw = board.offsetWidth;
+  const bh = board.offsetHeight;
+
+  let tw = bw * 0.55;
+  let th = tw / ratio;
+  if (th > bh * 0.85) { th = bh * 0.85; tw = th * ratio; }
+
+  const tl = (bw - tw) / 2;
+  const tt = (bh - th) / 2;
+
+  targetEl.style.left   = tl + 'px';
+  targetEl.style.top    = tt + 'px';
+  targetEl.style.width  = tw + 'px';
+  targetEl.style.height = th + 'px';
+
+  tRect  = { l: tl, t: tt, w: tw, h: th };
+  pieceW = tw / CONFIG.cols;
+  pieceH = th / CONFIG.rows;
+
+  makePieces();
+}
+
+function makePieces() {
+  const bw = board.offsetWidth;
+  const bh = board.offsetHeight;
+  const positions = scatter(CONFIG.cols * CONFIG.rows, bw, bh);
+
+  for (let row = 0; row < CONFIG.rows; row++) {
+    for (let col = 0; col < CONFIG.cols; col++) {
+      const idx = row * CONFIG.cols + col;
+      const el  = document.createElement('div');
+      el.className = 'piece';
+
+      el.dataset.col     = col;
+      el.dataset.row     = row;
+      el.dataset.cx      = tRect.l + col * pieceW;
+      el.dataset.cy      = tRect.t + row * pieceH;
+      el.dataset.snapped = '0';
+
+      el.style.width              = pieceW + 'px';
+      el.style.height             = pieceH + 'px';
+      el.style.backgroundImage    = `url('${CONFIG.imageUrl}')`;
+      el.style.backgroundSize     = `${tRect.w}px ${tRect.h}px`;
+      el.style.backgroundPosition = `-${col * pieceW}px -${row * pieceH}px`;
+
+      const { x, y } = positions[idx];
+      el.style.left = x + 'px';
+      el.style.top  = y + 'px';
+
+      el.addEventListener('mousedown', onDown);
+      el.addEventListener('touchstart', onDown, { passive: false });
+
+      board.appendChild(el);
+      pieces.push(el);
+    }
+  }
+}
+
+/* ══════════════════════════════════════
+   РАЗБРОС КУСОЧКОВ ПО КРАЯМ
+══════════════════════════════════════ */
+function scatter(n, bw, bh) {
+  const { l, t, w, h } = tRect;
+  const pad = 8;
+  const out = [];
+
+  const regions = [
+    { xl: 0,           xr: bw - pieceW,      yt: 0,           yb: t - pad - pieceH },
+    { xl: 0,           xr: bw - pieceW,      yt: t + h + pad, yb: bh - pieceH      },
+    { xl: 0,           xr: l - pad - pieceW, yt: 0,           yb: bh - pieceH      },
+    { xl: l + w + pad, xr: bw - pieceW,      yt: 0,           yb: bh - pieceH      },
+  ].filter(r => r.xr > r.xl && r.yb > r.yt);
+
+  for (let i = 0; i < n; i++) {
+    let x = 0, y = 0;
+
+    const shuffled = regions
+      .map(r => ({ r, sort: Math.random() }))
+      .sort((a, b) => a.sort - b.sort)
+      .map(s => s.r);
+
+    let ok = false;
+    for (const reg of shuffled) {
+      x = reg.xl + Math.random() * (reg.xr - reg.xl);
+      y = reg.yt + Math.random() * (reg.yb - reg.yt);
+      x = Math.max(0, Math.min(x, bw - pieceW));
+      y = Math.max(0, Math.min(y, bh - pieceH));
+      ok = true;
+      break;
+    }
+
+    if (!ok) {
+      x = Math.random() * (bw - pieceW);
+      y = Math.random() * (bh - pieceH);
+    }
+
+    out.push({ x, y });
+  }
+  return out;
+}
+
+/* ══════════════════════════════════════
+   DRAG START
+══════════════════════════════════════ */
+function onDown(e) {
+  if (e.type === 'touchstart') e.preventDefault();
+  if (drag) return;
+  if (puzzleComplete()) return;
+
+  const piece = e.currentTarget;
+  if (piece.dataset.snapped === '1') return;
+
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+  const br = board.getBoundingClientRect();
+  const bx = clientX - br.left;
+  const by = clientY - br.top;
+
+  const origLeft = parseFloat(piece.style.left);
+  const origTop  = parseFloat(piece.style.top);
+
+  drag = {
+    piece,
+    origLeft,
+    origTop,
+    startBX: bx,
+    startBY: by,
+  };
+
+  piece.classList.add('dragging');
+  piece.style.zIndex = '501';
+}
+
+/* ══════════════════════════════════════
+   DRAG MOVE
+══════════════════════════════════════ */
+document.addEventListener('mousemove', onMove);
+document.addEventListener('touchmove', onMove, { passive: false });
+
+function onMove(e) {
+  if (!drag) return;
+  if (e.type === 'touchmove') e.preventDefault();
+
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+  const br = board.getBoundingClientRect();
+  const bx = clientX - br.left;
+  const by = clientY - br.top;
+
+  const ddx = bx - drag.startBX;
+  const ddy = by - drag.startBY;
+
+  const bw = board.offsetWidth;
+  const bh = board.offsetHeight;
+
+  drag.piece.style.left = Math.max(0, Math.min(drag.origLeft + ddx, bw - pieceW)) + 'px';
+  drag.piece.style.top  = Math.max(0, Math.min(drag.origTop  + ddy, bh - pieceH)) + 'px';
+}
+
+/* ══════════════════════════════════════
+   DRAG END
+══════════════════════════════════════ */
+document.addEventListener('mouseup', onUp);
+document.addEventListener('touchend', onUp, { passive: false });
+
+function onUp() {
+  if (!drag) return;
+
+  const piece = drag.piece;
+  piece.classList.remove('dragging');
+  piece.style.zIndex = '';
+
+  const dist = Math.hypot(
+    parseFloat(piece.style.left) - parseFloat(piece.dataset.cx),
+    parseFloat(piece.style.top)  - parseFloat(piece.dataset.cy)
+  );
+
+  if (dist < CONFIG.snapDist) {
+    doSnap(piece);
+  }
+
+  drag = null;
+}
+
+/* ══════════════════════════════════════
+   ПРИЛИПАНИЕ И ФИКСАЦИЯ ДЕТАЛИ
+══════════════════════════════════════ */
+function doSnap(piece) {
+  piece.dataset.snapped = '1';
+
+  piece.style.transition = `left ${CONFIG.snapMs}ms ease-out, top ${CONFIG.snapMs}ms ease-out`;
+  piece.style.left = piece.dataset.cx + 'px';
+  piece.style.top  = piece.dataset.cy + 'px';
+
+  piece.classList.remove('snap-flash');
+  void piece.offsetWidth;
+  piece.classList.add('snap-flash');
+  piece.style.zIndex = '3';
+
+  playSnap();
+
+  setTimeout(() => {
+    piece.style.transition = '';
+    piece.classList.remove('snap-flash');
+    piece.classList.add('locked');
+  }, CONFIG.snapMs + 80);
+}
+
+/* ══════════════════════════════════════
+   ЗВУК ПРИЛИПАНИЯ
+══════════════════════════════════════ */
+function playSnap() {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc  = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(900, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(440, audioCtx.currentTime + 0.18);
+    gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.22);
+    osc.start(audioCtx.currentTime);
+    osc.stop(audioCtx.currentTime + 0.22);
+  } catch (_) {}
+}
+
+/* ══════════════════════════════════════
+   ЗАПУСК
+══════════════════════════════════════ */
+init();
+</script>
+</body>
+</html>
