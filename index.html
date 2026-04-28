@@ -105,7 +105,6 @@ header strong {
     0 5px 18px rgba(0, 0, 0, 0.75);
 }
 
-/* ── Активный (поднятый) кусочек ── */
 .piece.dragging {
   cursor: grabbing !important;
   transform: scale(1.08);
@@ -157,7 +156,6 @@ header strong {
 
 .zoom-btn:hover { background: rgba(40, 65, 110, 0.95); }
 
-/* ── Онбординг ── */
 #onboard-overlay {
   position: fixed;
   inset: 0;
@@ -240,7 +238,6 @@ header strong {
 
 #onboard-card button:hover { background: #f25774; }
 
-/* Тултип-подсказка после онбординга */
 #hint-tooltip {
   position: fixed;
   top: 50%;
@@ -289,14 +286,13 @@ header strong {
   </div>
 </div>
 
-<!-- Онбординг -->
 <div id="onboard-overlay">
   <div id="onboard-card">
     <h2>КАК ИГРАТЬ</h2>
     <ul>
       <li data-icon="🧩">Перетаскивай кусочки на тёмный квадрат — они сами защёлкнутся на свои места</li>
       <li data-icon="✋">Двигай поле, потянув за пустую область</li>
-      <li data-icon="🔍">Колёсико мыши или щипок двумя пальцами — масштаб. Кнопки справа внизу — то же самое</li>
+      <li data-icon="🔍">Колёсико мыши или щипок двумя пальцами — масштаб</li>
     </ul>
     <button id="onboard-close">Понятно, поехали</button>
   </div>
@@ -344,12 +340,7 @@ let pan  = null;
 let pinch = null;
 
 let audioCtx = null;
-
-// Глобальный счётчик z-index, чтобы активный кусочек был всегда поверх
 let topZ = 100;
-
-// Флаг — было ли уже первое взаимодействие (чтобы прятать tooltip)
-let firstInteractionDone = false;
 
 function puzzleComplete() {
   return pieces.length > 0 && pieces.every(p => p.dataset.snapped === '1');
@@ -482,7 +473,6 @@ function scatter(n) {
   return out;
 }
 
-/* ── DRAG START (КУСОЧЕК) ── */
 function onPieceDown(e) {
   if (e.type === 'touchstart') {
     if (e.touches.length >= 2) { startPinch(e); return; }
@@ -495,8 +485,6 @@ function onPieceDown(e) {
   if (piece.dataset.snapped === '1') return;
 
   e.stopPropagation();
-
-  // Прячем подсказку при первом взаимодействии
   hideHintTooltip();
 
   const sp = evtBoardPos(e);
@@ -511,7 +499,6 @@ function onPieceDown(e) {
   };
 
   piece.classList.add('dragging');
-  // Поднимаем кусок выше всех — увеличиваем глобальный счётчик
   piece.style.zIndex = String(++topZ);
 }
 
@@ -559,8 +546,6 @@ function onUp(e) {
   if (drag) {
     const piece = drag.piece;
     piece.classList.remove('dragging');
-    // НЕ обнуляем z-index — пусть последний поднятый остаётся выше остальных,
-    // пока следующий не пересилит счётчиком topZ.
 
     const dist = Math.hypot(
       parseFloat(piece.style.left) - parseFloat(piece.dataset.cx),
@@ -577,7 +562,6 @@ function onUp(e) {
   }
 }
 
-/* ── PAN по board ── */
 board.addEventListener('mousedown', onBoardDown);
 board.addEventListener('touchstart', onBoardDown, { passive: false });
 
@@ -615,7 +599,6 @@ function clampPan() {
   else panY = Math.max(bh - wH - margin, Math.min(panY, margin));
 }
 
-/* ── ЗУМ ── */
 board.addEventListener('wheel', onWheel, { passive: false });
 
 function onWheel(e) {
@@ -649,5 +632,127 @@ btnReset.addEventListener('click', () => {
   applyTransform();
 });
 
-/* ── PINCH ── */
 function startPinch(e) {
+  if (drag) {
+    drag.piece.classList.remove('dragging');
+    drag = null;
+  }
+  if (pan) {
+    pan = null;
+    board.classList.remove('panning');
+  }
+
+  const t1 = e.touches[0], t2 = e.touches[1];
+  const br = board.getBoundingClientRect();
+  const x1 = t1.clientX - br.left, y1 = t1.clientY - br.top;
+  const x2 = t2.clientX - br.left, y2 = t2.clientY - br.top;
+  const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
+
+  pinch = {
+    startDist: Math.hypot(x2 - x1, y2 - y1),
+    startZoom: zoom,
+    centerSX: cx,
+    centerSY: cy,
+    startWorld: screenToWorld(cx, cy),
+  };
+}
+
+function updatePinch(e) {
+  const t1 = e.touches[0], t2 = e.touches[1];
+  const br = board.getBoundingClientRect();
+  const x1 = t1.clientX - br.left, y1 = t1.clientY - br.top;
+  const x2 = t2.clientX - br.left, y2 = t2.clientY - br.top;
+
+    const dist = Math.hypot(x2 - x1, y2 - y1);
+  const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
+
+  let newZoom = pinch.startZoom * (dist / pinch.startDist);
+  newZoom = Math.max(CONFIG.minZoom, Math.min(newZoom, CONFIG.maxZoom));
+
+  zoom = newZoom;
+  panX = cx - pinch.startWorld.x * zoom;
+  panY = cy - pinch.startWorld.y * zoom;
+  clampPan();
+  applyTransform();
+}
+
+/* ── SNAP ── */
+function doSnap(piece) {
+  piece.dataset.snapped = '1';
+  piece.style.transition = `left ${CONFIG.snapMs}ms ease-out, top ${CONFIG.snapMs}ms ease-out`;
+  piece.style.left = piece.dataset.cx + 'px';
+  piece.style.top  = piece.dataset.cy + 'px';
+
+  piece.classList.remove('snap-flash');
+  void piece.offsetWidth;
+  piece.classList.add('snap-flash');
+  piece.style.zIndex = '3';
+
+  playSnap();
+
+  setTimeout(() => {
+    piece.style.transition = '';
+    piece.classList.remove('snap-flash');
+    piece.classList.add('locked');
+  }, CONFIG.snapMs + 80);
+}
+
+function playSnap() {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc  = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(900, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(440, audioCtx.currentTime + 0.18);
+    gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.22);
+    osc.start(audioCtx.currentTime);
+    osc.stop(audioCtx.currentTime + 0.22);
+  } catch (_) {}
+}
+
+/* ── ОНБОРДИНГ ── */
+function showOnboarding() {
+  if (localStorage.getItem('puzzle_onboarded') === '1') {
+    // Если уже показывали — сразу подсветим тултип на пару секунд
+    setTimeout(showHintTooltip, 600);
+    return;
+  }
+  onboardOverlay.classList.add('show');
+}
+
+function closeOnboarding() {
+  onboardOverlay.classList.remove('show');
+  localStorage.setItem('puzzle_onboarded', '1');
+  setTimeout(showHintTooltip, 350);
+}
+
+function showHintTooltip() {
+  if (firstInteractionDone) return;
+  hintTooltip.classList.add('show');
+  // Авто-скрытие через 5 секунд, если пользователь так и не тронул кусочки
+  setTimeout(hideHintTooltip, 5000);
+}
+
+function hideHintTooltip() {
+  firstInteractionDone = true;
+  hintTooltip.classList.remove('show');
+}
+
+let firstInteractionDone = false;
+
+onboardClose.addEventListener('click', closeOnboarding);
+onboardOverlay.addEventListener('click', (e) => {
+  if (e.target === onboardOverlay) closeOnboarding();
+});
+
+/* ── СТАРТ ── */
+init();
+showOnboarding();
+
+</script>
+</body>
+</html>
